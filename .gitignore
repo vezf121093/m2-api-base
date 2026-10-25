@@ -7,3 +7,4 @@ htmlcov/
 .coverage
 .env
 .DS_Store
+.idea/
