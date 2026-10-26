@@ -13,8 +13,11 @@ _next_id: int = 1
 
 def add(*, title: str, due_date: date, priority: TaskPriority) -> Task:
     """Guarda una tarea nueva con el siguiente ID y la devuelve."""
-    # TODO: construir Task con _next_id, guardarla en _tasks, incrementar _next_id.
-    raise NotImplementedError
+    global _next_id
+    task = Task(id=_next_id, title=title, due_date=due_date, priority=priority)
+    _tasks[task.id] = task
+    _next_id += 1
+    return task
 
 
 def reset() -> None:
