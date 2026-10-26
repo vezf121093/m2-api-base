@@ -33,6 +33,35 @@ Endpoints actuales:
 | GET    | `/users`          | Lista de usuarios               |
 | GET    | `/users/{id}`     | Un usuario por id (404 si no existe) |
 | POST   | `/users`          | Crea un usuario (409 si el email ya existe) |
+| POST   | `/tasks`          | Registra una tarea con fecha límite y prioridad (422 si es inválida) |
+
+### `POST /tasks`
+
+Cuerpo JSON (los tres campos son obligatorios y no aceptan `null`):
+
+| Campo      | Regla |
+|------------|-------|
+| `title`    | Texto. Se recortan los espacios exteriores y debe tener entre 1 y 120 caracteres. Se devuelve normalizado; los espacios internos se conservan. |
+| `due_date` | Cadena `YYYY-MM-DD` que sea una fecha real. Se rechazan timestamps, fechas con hora y otros formatos. Debe ser hoy o futura, según la fecha **UTC**. |
+| `priority` | `low`, `medium` o `high`, en minúsculas. |
+
+```bash
+curl -X POST http://127.0.0.1:8000/tasks \
+  -H "Content-Type: application/json" \
+  -d '{"title": "  Comprar café  ", "due_date": "2026-10-30", "priority": "medium"}'
+# 201 → {"id": 1, "title": "Comprar café", "due_date": "2026-10-30", "priority": "medium"}
+```
+
+Los errores devuelven **422** con dos formas de `detail`:
+
+- Estructura, tipos o formato (Pydantic): `detail` es una **lista** de errores con `loc` y `type`.
+  Los mensajes los genera Pydantic, en inglés.
+- Fecha pasada (regla de negocio de `tasks/service.py`): `detail` es una **cadena**,
+  `{"detail": "La fecha límite no puede ser anterior a hoy"}`.
+
+Si una petición trae ambos problemas, prevalece el 422 de Pydantic. Una petición
+rechazada no guarda la tarea ni consume un id. Los ids empiezan en 1 (no hay datos semilla)
+y el almacén es en memoria, como el de `users`. Los campos extra del cuerpo se ignoran.
 
 ## Tests y calidad
 
