@@ -9,13 +9,16 @@ Notas del contrato:
   - No se afirma el texto de `msg` de Pydantic (sale en inglés): solo `loc` y `type`.
   - `id == 1` se comprueba solo donde prueba generación o consumo de IDs.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from httpx import Response
+from pydantic import ValidationError
 
-from tasks import service
+from tasks import repository, service
+from tasks.schemas import Task, TaskCreate, TaskPriority
 
 RELOJ_BASE = datetime(2026, 10, 24, 12, 0, tzinfo=timezone.utc)
 MENSAJE_FECHA_PASADA = "La fecha límite no puede ser anterior a hoy"
@@ -333,3 +336,124 @@ def test_create_task_ignora_campos_extra(client: TestClient) -> None:
 
     assert response.status_code == 201
     assert "extra" not in response.json()
+
+
+# =====================================================================================
+# Pruebas unitarias
+#
+# Prueban cada capa por separado, sin pasar por HTTP. No repiten la tabla de casos del
+# endpoint: solo lo que cada capa decide por sí misma. El estado del repositorio lo
+# reinicia el fixture autouse de conftest.py (llama a `tasks.repository.reset()`).
+# =====================================================================================
+
+
+# --- schemas: TaskCreate ---
+
+
+def test_task_create_normaliza_el_titulo() -> None:
+    datos = {"title": "  Hola   mundo  ", "due_date": "2026-10-25", "priority": "low"}
+
+    tarea = TaskCreate(**datos)
+
+    assert tarea.title == "Hola   mundo"
+
+
+def test_task_create_convierte_la_fecha_valida_en_date() -> None:
+    datos = {"title": "Tarea", "due_date": "2026-10-25", "priority": "low"}
+
+    tarea = TaskCreate(**datos)
+
+    assert tarea.due_date == date(2026, 10, 25)
+
+
+@pytest.mark.parametrize(
+    "fecha",
+    [
+        pytest.param("2026-10-25T10:30:00", id="fecha_con_hora"),
+        pytest.param("1729728000", id="timestamp_como_cadena"),
+        pytest.param(1729728000, id="timestamp_numerico"),
+    ],
+)
+def test_task_create_rechaza_fecha_con_formato_invalido(fecha: object) -> None:
+    datos = {"title": "Tarea", "due_date": fecha, "priority": "low"}
+
+    with pytest.raises(ValidationError) as excinfo:
+        TaskCreate(**datos)
+
+    assert [error["loc"] for error in excinfo.value.errors()] == [("due_date",)]
+
+
+# --- service: create_task ---
+
+
+@pytest.fixture
+def llamadas_a_add(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
+    """Sustituye `repository.add` por un doble que registra los argumentos que recibe."""
+    llamadas: list[dict[str, object]] = []
+
+    def _add_falso(**campos: object) -> Task:
+        llamadas.append(campos)
+        return Task(id=99, **campos)
+
+    monkeypatch.setattr(repository, "add", _add_falso)
+    return llamadas
+
+
+def test_create_task_con_fecha_pasada_no_intenta_guardar(
+    llamadas_a_add: list[dict[str, object]],
+) -> None:
+    datos = TaskCreate(title="Tarea", due_date="2026-10-23", priority="low")
+
+    with pytest.raises(HTTPException) as excinfo:
+        service.create_task(datos)
+
+    assert excinfo.value.status_code == 422
+    assert excinfo.value.detail == MENSAJE_FECHA_PASADA
+    assert llamadas_a_add == []
+
+
+def test_create_task_con_fecha_de_hoy_guarda_con_los_datos_normalizados(
+    llamadas_a_add: list[dict[str, object]],
+) -> None:
+    datos = TaskCreate(title="  Tarea  ", due_date="2026-10-24", priority="high")
+
+    tarea = service.create_task(datos)
+
+    assert llamadas_a_add == [
+        {"title": "Tarea", "due_date": date(2026, 10, 24), "priority": TaskPriority.high}
+    ]
+    assert tarea.id == 99  # lo devuelto por el doble: el service no crea la tarea por su cuenta
+
+
+# --- repository: add / reset ---
+
+
+def _agregar(titulo: str) -> Task:
+    return repository.add(title=titulo, due_date=date(2026, 10, 25), priority=TaskPriority.low)
+
+
+def test_add_asigna_ids_consecutivos() -> None:
+    primera = _agregar("Primera")
+
+    segunda = _agregar("Segunda")
+
+    assert (primera.id, segunda.id) == (1, 2)
+
+
+def test_add_guarda_las_tareas() -> None:
+    primera = _agregar("Primera")
+    segunda = _agregar("Segunda")
+
+    guardadas = repository._tasks
+
+    assert guardadas == {1: primera, 2: segunda}
+
+
+def test_reset_vacia_el_almacen_y_reinicia_los_ids() -> None:
+    _agregar("Antigua")
+
+    repository.reset()
+    nueva = _agregar("Nueva")
+
+    assert nueva.id == 1
+    assert repository._tasks == {1: nueva}

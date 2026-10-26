@@ -4,10 +4,10 @@ Las rutas no acceden al repositorio directamente: pasan por aquí. Esta capa es 
 única que conoce `repository.py` y la que decide cuándo algo es un error de
 dominio (usando `core.errors`).
 """
-from datetime import date, datetime, timezone  # noqa: F401  # TODO: se usan al implementar
+from datetime import datetime, timezone
 
-from core import errors  # noqa: F401  # TODO: se usa al implementar
-from tasks import repository  # noqa: F401  # TODO: se usa al implementar
+from core import errors
+from tasks import repository
 from tasks.schemas import Task, TaskCreate
 
 
@@ -18,5 +18,6 @@ def create_task(data: TaskCreate) -> Task:
     si `data.due_date` es anterior a `datetime.now(timezone.utc).date()`. En ese
     caso no guarda nada.
     """
-    # TODO: calcular hoy en UTC, comparar, rechazar o llamar a repository.add(...)
-    raise NotImplementedError
+    if data.due_date < datetime.now(timezone.utc).date():
+        raise errors.invalid_request("La fecha límite no puede ser anterior a hoy")
+    return repository.add(title=data.title, due_date=data.due_date, priority=data.priority)
